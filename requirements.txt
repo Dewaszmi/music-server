@@ -1,0 +1,2 @@
+ytmusicapi
+yt-dlp

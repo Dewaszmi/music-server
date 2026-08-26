@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Library import</title>
+  <style>
+    :root {
+      --bg: #12110f;
+      --panel: #1c1b18;
+      --line: #2e2c28;
+      --text: #ece7dc;
+      --muted: #9a9488;
+      --accent: #d4a24c;
+      --ok: #7dae6a;
+      --bad: #c56b5a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    main {
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.35rem; }
+    .lede { color: var(--muted); margin: 0 0 1.75rem; }
+    form { display: flex; gap: 0.5rem; margin-bottom: 1.75rem; }
+    input[type="text"] {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--text);
+      padding: 0.7rem 0.8rem;
+      border-radius: 4px;
+      font: inherit;
+    }
+    button {
+      font: 600 14px/1 system-ui, sans-serif;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border: 0;
+      border-radius: 4px;
+      padding: 0.7rem 0.95rem;
+      cursor: pointer;
+      background: var(--accent);
+      color: #1a1408;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .toolbar h2 {
+      font: 600 0.8rem/1 system-ui, sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0;
+    }
+    .scan-msg { color: var(--muted); font-size: 0.9rem; }
+    .job {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 0.75rem;
+    }
+    .job header {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: baseline;
+    }
+    .query { word-break: break-all; }
+    .status {
+      font: 0.72rem/1 system-ui, sans-serif;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .status.running, .status.queued { color: var(--accent); }
+    .status.done { color: var(--ok); }
+    .status.error { color: var(--bad); }
+    .meta { color: var(--muted); margin: 0.35rem 0 0.6rem; }
+    .bar { height: 6px; background: #2a2824; border-radius: 99px; overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: var(--accent); }
+    .current { margin: 0.55rem 0 0; }
+    .log {
+      margin: 0.7rem 0 0;
+      padding: 0.6rem 0.7rem;
+      background: #141312;
+      border-radius: 4px;
+      color: var(--muted);
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      max-height: 9rem;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .empty { color: var(--muted); }
+    .error { color: var(--bad); margin: 0.4rem 0 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Add to library</h1>
+    <p class="lede">Same input as <code>script.sh</code>: an album search, or a YouTube Music artist / Topic channel URL.</p>
+    <form id="add-form">
+      <input id="query" type="text" name="query" required placeholder="artist / album keywords, or a YouTube Music URL">
+      <button type="submit">Add</button>
+    </form>
+    <div class="toolbar">
+      <h2>Jobs</h2>
+      <div>
+        <button class="secondary" id="scan" type="button">Rescan library</button>
+        <span class="scan-msg" id="scan-msg"></span>
+      </div>
+    </div>
+    <div id="jobs" class="empty">No jobs yet.</div>
+  </main>
+  <script>
+    const jobsEl = document.getElementById("jobs");
+    const scanMsg = document.getElementById("scan-msg");
+
+    function pct(job) {
+      if (!job.total) return job.status === "done" ? 100 : 0;
+      return Math.round(((job.downloaded + job.failed) / job.total) * 100);
+    }
+
+    function render(jobs) {
+      if (!jobs.length) {
+        jobsEl.className = "empty";
+        jobsEl.textContent = "No jobs yet.";
+        return;
+      }
+      jobsEl.className = "";
+      jobsEl.innerHTML = jobs.map((job) => {
+        const counts = job.total
+          ? `${job.downloaded} downloaded · ${job.failed} failed · ${job.total} total`
+          : job.status;
+        const artist = job.artist ? `${job.artist} · ` : "";
+        return `<article class="job">
+          <header>
+            <div class="query">${escapeHtml(job.query)}</div>
+            <div class="status ${job.status}">${job.status}</div>
+          </header>
+          <p class="meta">${escapeHtml(artist + counts)}</p>
+          <div class="bar"><span style="width:${pct(job)}%"></span></div>
+          ${job.current ? `<p class="current">${escapeHtml(job.current)}</p>` : ""}
+          ${job.error ? `<p class="error">${escapeHtml(job.error)}</p>` : ""}
+          ${job.log?.length ? `<pre class="log">${escapeHtml(job.log.join("\n"))}</pre>` : ""}
+        </article>`;
+      }).join("");
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    const events = new EventSource("/api/events");
+    events.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      render(data.jobs || []);
+    };
+    events.onerror = () => {
+      scanMsg.textContent = events.readyState === EventSource.CLOSED ? "Live updates disconnected" : "";
+    };
+
+    document.getElementById("add-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = document.getElementById("query");
+      const query = input.value.trim();
+      if (!query) return;
+      const res = await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Could not queue job");
+        return;
+      }
+      input.value = "";
+    });
+
+    document.getElementById("scan").addEventListener("click", async () => {
+      const button = document.getElementById("scan");
+      button.disabled = true;
+      scanMsg.textContent = "Scanning…";
+      try {
+        const res = await fetch("/api/scan", { method: "POST" });
+        const data = await res.json();
+        scanMsg.textContent = res.ok ? (data.message || "Scan started") : (data.error || "Scan failed");
+      } catch (err) {
+        scanMsg.textContent = String(err);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

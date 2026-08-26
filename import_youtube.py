@@ -7,12 +7,14 @@ from pathlib import Path
 
 import yt_dlp
 from mutagen import File as MutagenFile
+from mutagen.mp4 import MP4
 
 from youtube_search import Release, ResolveError, resolve
 
 ROOT = Path(__file__).resolve().parent
 CACHE = ROOT / "yt-cache"
 MUSIC = ROOT / "beets-shit"
+AUDIO = {".m4a", ".mp4", ".aac", ".opus", ".ogg", ".webm", ".mp3", ".flac"}
 os.environ["PATH"] = str(Path.home() / ".local/bin") + os.pathsep + os.environ.get("PATH", "")
 
 
@@ -43,7 +45,7 @@ def download(url: str, dest: Path, on_log=None) -> list[Path]:
         "outtmpl": str(dest / "%(title)s [%(id)s].%(ext)s"),
         "format": "bestaudio/best",
         "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "flac"},
+            {"key": "FFmpegExtractAudio", "preferredcodec": "best"},
             {"key": "FFmpegMetadata"},
             {"key": "EmbedThumbnail"},
         ],
@@ -58,7 +60,10 @@ def download(url: str, dest: Path, on_log=None) -> list[Path]:
     for entry in info.get("entries") or [info]:
         if not entry:
             continue
-        match = next((p for p in dest.glob("*.flac") if f"[{entry['id']}]" in p.name), None)
+        match = next(
+            (p for p in dest.iterdir() if p.suffix.lower() in AUDIO and f"[{entry['id']}]" in p.name),
+            None,
+        )
         if match:
             files.append(match)
     return files
@@ -67,16 +72,15 @@ def download(url: str, dest: Path, on_log=None) -> list[Path]:
 def stamp(files: list[Path], release: Release, artist: str | None) -> None:
     for i, path in enumerate(files, 1):
         audio = MutagenFile(path)
-        for key in list(audio):
-            if key.lower() in {"track", "tracknumber", "tracktotal"}:
-                del audio[key]
-        audio["tracknumber"] = str(i)
-        audio["tracktotal"] = str(len(files))
-        if artist:
-            audio["albumartist"] = artist
-            audio["artist"] = artist
-        if release.release_type != "single":
-            audio["album"] = release.title
+        if isinstance(audio, MP4):
+            audio["trkn"] = [(i, len(files))]
+            if artist:
+                audio["aART"] = [artist]
+                audio["\xa9ART"] = [artist]
+            if release.release_type != "single":
+                audio["\xa9alb"] = [release.title]
+        else:
+            audio["trkn"] = [(i, len(files))]
         audio.save()
 
 
@@ -96,7 +100,8 @@ def beet_import(dest: Path, release: Release, artist: str | None) -> None:
         cmd += ["--set", f"year={release.year}"]
     result = subprocess.run(cmd + [str(dest)], stdin=subprocess.DEVNULL, capture_output=True, text=True)
     err = ((result.stdout or "") + (result.stderr or "")).strip()
-    if result.returncode or any(dest.rglob("*.flac")):
+    leftover = any(p.suffix.lower() in AUDIO for p in dest.rglob("*") if p.is_file())
+    if result.returncode or leftover:
         raise RuntimeError(err or "beet import failed")
     subprocess.run(["chcon", "-R", "--reference", str(MUSIC), str(MUSIC)], capture_output=True)
 

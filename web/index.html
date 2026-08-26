@@ -99,6 +99,8 @@
       try {
         const res = await fetch("/api/scan", { method: "POST" });
         const data = await res.json();
+        scanMsg.style.maxHeight = "none";
+        scanMsg.style.overflow = "visible";
         scanMsg.textContent = res.ok ? (data.message || "Scan started") : (data.error || "Scan failed");
       } catch (err) {
         scanMsg.textContent = String(err);

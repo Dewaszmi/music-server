@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 import json
+import os
 import queue
+import secrets
 import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+
+from dotenv import load_dotenv
+
+load_dotenv(SCRIPT_DIR / ".env")
 
 from import_youtube import run_import
 from youtube_search import ResolveError
@@ -17,6 +23,7 @@ from youtube_search import ResolveError
 WEB_DIR = SCRIPT_DIR / "web"
 HOST = "0.0.0.0"
 PORT = 8765
+AUTH_TOKEN = os.environ.get("WEB_UI_TOKEN", "")
 
 jobs_lock = threading.Lock()
 jobs: dict[int, dict] = {}
@@ -187,11 +194,32 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("JSON object required")
         return data
 
+    def _provided_token(self) -> str | None:
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[7:].strip() or None
+        parsed = urlparse(self.path)
+        values = parse_qs(parsed.query).get("token")
+        if values and values[0]:
+            return values[0]
+        return None
+
+    def _require_auth(self) -> bool:
+        if not AUTH_TOKEN:
+            return True
+        provided = self._provided_token()
+        if not provided or not secrets.compare_digest(provided, AUTH_TOKEN):
+            self._json(401, {"error": "unauthorized"})
+            return False
+        return True
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in {"/", "/index.html"}:
             html = (WEB_DIR / "index.html").read_bytes()
             self._send(200, html, "text/html; charset=utf-8")
+            return
+        if not self._require_auth():
             return
         if path == "/api/jobs":
             self._send(200, jobs_payload().encode(), "application/json; charset=utf-8")
@@ -225,6 +253,8 @@ class Handler(BaseHTTPRequestHandler):
                     listeners.remove(listener)
 
     def do_POST(self) -> None:
+        if not self._require_auth():
+            return
         path = urlparse(self.path).path
         if path == "/api/jobs":
             try:
@@ -277,6 +307,10 @@ def main() -> None:
     threading.Thread(target=worker, daemon=True).start()
     server = Server((HOST, PORT), Handler)
     print(f"Listening on http://{HOST}:{PORT}", flush=True)
+    if AUTH_TOKEN:
+        print("Authentication enabled (WEB_UI_TOKEN is set)", flush=True)
+    else:
+        print("Authentication disabled (set WEB_UI_TOKEN in .env to require a token)", flush=True)
     server.serve_forever()
 
 

@@ -1,3 +1,4 @@
 ytmusicapi
 yt-dlp[default]
 mutagen
+python-dotenv

@@ -6,7 +6,16 @@
   <title>Library import</title>
 </head>
 <body>
-  <main>
+  <main id="login-view" hidden>
+    <h1>Sign in</h1>
+    <p class="lede">Enter the access token to use the library import UI.</p>
+    <form id="login-form">
+      <input id="token" type="password" name="token" required placeholder="Access token" autocomplete="current-password">
+      <button type="submit">Continue</button>
+    </form>
+    <p class="error" id="login-error" hidden></p>
+  </main>
+  <main id="app-view" hidden>
     <h1>Add to library</h1>
     <p class="lede">Same input as <code>script.sh</code>: an album search, or a YouTube Music artist / Topic channel URL.</p>
     <form id="add-form">
@@ -17,14 +26,118 @@
       <h2>Jobs</h2>
       <div>
         <button class="secondary" id="scan" type="button">Rescan library</button>
+        <button class="secondary" id="logout" type="button">Sign out</button>
         <span class="scan-msg" id="scan-msg"></span>
       </div>
     </div>
     <div id="jobs" class="empty">No jobs yet.</div>
   </main>
   <script>
+    const TOKEN_KEY = "webUiToken";
     const jobsEl = document.getElementById("jobs");
     const scanMsg = document.getElementById("scan-msg");
+    const loginView = document.getElementById("login-view");
+    const appView = document.getElementById("app-view");
+    const loginError = document.getElementById("login-error");
+    let events = null;
+
+    function getToken() {
+      return localStorage.getItem(TOKEN_KEY) || "";
+    }
+
+    function setToken(token) {
+      if (token) {
+        localStorage.setItem(TOKEN_KEY, token);
+      } else {
+        localStorage.removeItem(TOKEN_KEY);
+      }
+    }
+
+    function authHeaders(extra = {}) {
+      const headers = { ...extra };
+      const token = getToken();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+      return headers;
+    }
+
+    function showLogin(message = "") {
+      disconnectEvents();
+      appView.hidden = true;
+      loginView.hidden = false;
+      loginError.hidden = !message;
+      loginError.textContent = message;
+    }
+
+    function showApp() {
+      loginView.hidden = true;
+      appView.hidden = false;
+      connectEvents();
+    }
+
+    function disconnectEvents() {
+      if (events) {
+        events.close();
+        events = null;
+      }
+    }
+
+    function connectEvents() {
+      disconnectEvents();
+      const token = getToken();
+      const url = token ? `/api/events?token=${encodeURIComponent(token)}` : "/api/events";
+      events = new EventSource(url);
+      events.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        render(data.jobs || []);
+      };
+      events.onerror = () => {
+        if (events.readyState === EventSource.CLOSED) {
+          scanMsg.textContent = "Live updates disconnected";
+        }
+      };
+    }
+
+    async function checkAuth() {
+      const res = await fetch("/api/jobs", { headers: authHeaders() });
+      if (res.status === 401) {
+        return getToken() ? "invalid" : "required";
+      }
+      if (!res.ok) {
+        return "error";
+      }
+      const data = await res.json();
+      render(data.jobs || []);
+      return "ok";
+    }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      const urlToken = params.get("token");
+      if (urlToken) {
+        setToken(urlToken);
+        params.delete("token");
+        const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
+        window.history.replaceState({}, "", next);
+      }
+
+      const status = await checkAuth();
+      if (status === "required") {
+        showLogin();
+        return;
+      }
+      if (status === "invalid") {
+        setToken("");
+        showLogin("Invalid or expired token.");
+        return;
+      }
+      if (status === "error") {
+        showLogin("Could not reach the server.");
+        return;
+      }
+      showApp();
+    }
 
     function pct(job) {
       if (!job.total) return job.status === "done" ? 100 : 0;
@@ -65,14 +178,27 @@
         .replaceAll('"', "&quot;");
     }
 
-    const events = new EventSource("/api/events");
-    events.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      render(data.jobs || []);
-    };
-    events.onerror = () => {
-      scanMsg.textContent = events.readyState === EventSource.CLOSED ? "Live updates disconnected" : "";
-    };
+    document.getElementById("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = document.getElementById("token");
+      const token = input.value.trim();
+      if (!token) return;
+      setToken(token);
+      loginError.hidden = true;
+      const status = await checkAuth();
+      if (status !== "ok") {
+        setToken("");
+        showLogin(status === "invalid" ? "Invalid token." : "Could not sign in.");
+        return;
+      }
+      input.value = "";
+      showApp();
+    });
+
+    document.getElementById("logout").addEventListener("click", () => {
+      setToken("");
+      showLogin();
+    });
 
     document.getElementById("add-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -81,9 +207,14 @@
       if (!query) return;
       const res = await fetch("/api/jobs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ query }),
       });
+      if (res.status === 401) {
+        setToken("");
+        showLogin("Session expired. Sign in again.");
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || "Could not queue job");
@@ -97,7 +228,12 @@
       button.disabled = true;
       scanMsg.textContent = "Scanning…";
       try {
-        const res = await fetch("/api/scan", { method: "POST" });
+        const res = await fetch("/api/scan", { method: "POST", headers: authHeaders() });
+        if (res.status === 401) {
+          setToken("");
+          showLogin("Session expired. Sign in again.");
+          return;
+        }
         const data = await res.json();
         scanMsg.style.maxHeight = "none";
         scanMsg.style.overflow = "visible";
@@ -108,6 +244,8 @@
         button.disabled = false;
       }
     });
+
+    init();
   </script>
 </body>
 </html>

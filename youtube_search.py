@@ -29,12 +29,97 @@ def _type(section: str, raw: str | None) -> str:
     return "album" if section == "albums" else "single"
 
 
+_ROLE = re.compile(r"\s*(?:,\s*)?(?:&|and|feat\.?|ft\.?)\s+", re.I)
+_TITLE_FEAT = re.compile(r"\((?:feat\.?|ft\.?)\s+([^)]+)\)", re.I)
+
+
+def _label(item: dict | str | None) -> str | None:
+    if isinstance(item, dict):
+        return item.get("name")
+    return item
+
+
+def _parts(name: str, albumartist: str | None = None) -> list[str]:
+    listed = bool(_ROLE.search(name))
+    if not listed and albumartist and name.casefold().startswith(albumartist.casefold() + ","):
+        listed = True
+    if not listed:
+        return [name]
+    out = []
+    for chunk in _ROLE.split(name):
+        out.extend(p.strip() for p in chunk.split(",") if p.strip())
+    return out
+
+
+def _names(item: dict, albumartist: str | None = None) -> list[str]:
+    seen, names = set(), []
+    for artist in item.get("artists") or []:
+        label = _label(artist)
+        if not label:
+            continue
+        for name in _parts(label, albumartist):
+            key = name.casefold()
+            if key not in seen:
+                seen.add(key)
+                names.append(name)
+    if match := _TITLE_FEAT.search(item.get("title") or ""):
+        for name in _parts(match.group(1), albumartist):
+            key = name.casefold()
+            if key not in seen:
+                seen.add(key)
+                names.append(name)
+    return names
+
+
+def artist_credit(names: list[str], albumartist: str | None = None) -> str:
+    if not names:
+        return albumartist or ""
+    main = next((n for n in names if albumartist and n.casefold() == albumartist.casefold()), names[0])
+    rest = [n for n in names if n.casefold() != main.casefold()]
+    if not rest:
+        return main
+    featured = rest[0] if len(rest) == 1 else f"{', '.join(rest[:-1])} & {rest[-1]}"
+    return f"{main} feat. {featured}"
+
+
 def _artist(item: dict) -> str | None:
-    artists = item.get("artists") or []
-    if not artists:
-        return None
-    first = artists[0]
-    return first.get("name") if isinstance(first, dict) else first
+    names = _names(item)
+    return names[0] if names else None
+
+
+def track_artists(url: str, albumartist: str | None = None) -> dict[str, list[str]]:
+    try:
+        yt = YTMusic()
+        tracks: list[dict] = []
+        if match := re.search(r"[?&]list=([\w-]+)", url):
+            pid = match.group(1)
+            try:
+                tracks = yt.get_playlist(pid, limit=None).get("tracks") or []
+            except Exception:
+                tracks = []
+            if not tracks and pid.startswith("OLAK5uy_"):
+                browse = yt.get_album_browse_id(pid)
+                if browse:
+                    tracks = yt.get_album(browse).get("tracks") or []
+        elif match := re.search(r"(?:youtu\.be/|v=)([\w-]{11})", url):
+            details = yt.get_song(match.group(1)).get("videoDetails") or {}
+            author = details.get("author")
+            tracks = [
+                {
+                    "videoId": match.group(1),
+                    "title": details.get("title"),
+                    "artists": [{"name": author}] if author else [],
+                }
+            ]
+        out = {}
+        for track in tracks:
+            vid = track.get("videoId")
+            names = _names(track, albumartist)
+            if vid and names:
+                out[vid] = names
+        return out
+    except Exception:
+        return {}
 
 
 def _section(yt: YTMusic, artist: dict, key: str) -> list[dict]:

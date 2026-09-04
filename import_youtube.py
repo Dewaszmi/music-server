@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -9,11 +10,11 @@ import yt_dlp
 from mutagen import File as MutagenFile
 from mutagen.mp4 import MP4
 
-from youtube_search import Release, ResolveError, resolve
+from youtube_search import Release, ResolveError, artist_credit, resolve, track_artists
 
 ROOT = Path(__file__).resolve().parent
 CACHE = ROOT / "yt-cache"
-MUSIC = ROOT / "beets-shit"
+MUSIC = ROOT / "music"
 AUDIO = {".m4a", ".mp4", ".aac", ".opus", ".ogg", ".webm", ".mp3", ".flac"}
 os.environ["PATH"] = str(Path.home() / ".local/bin") + os.pathsep + os.environ.get("PATH", "")
 
@@ -69,18 +70,41 @@ def download(url: str, dest: Path, on_log=None) -> list[Path]:
     return files
 
 
-def stamp(files: list[Path], release: Release, artist: str | None) -> None:
+def _video_id(path: Path) -> str | None:
+    match = re.search(r"\[([^\[\]]+)\]", path.stem)
+    return match.group(1) if match else None
+
+
+def stamp(files: list[Path], release: Release, artist: str | None, guests: dict[str, list[str]] | None = None) -> None:
+    guests = guests or {}
+    album = release.title if release.release_type != "single" else None
     for i, path in enumerate(files, 1):
         audio = MutagenFile(path)
+        names = guests.get(_video_id(path) or "") or ([artist] if artist else [])
+        display = artist_credit(names, artist)
         if isinstance(audio, MP4):
             audio["trkn"] = [(i, len(files))]
+            if album:
+                audio["\xa9alb"] = [album]
             if artist:
                 audio["aART"] = [artist]
-                audio["\xa9ART"] = [artist]
-            if release.release_type != "single":
-                audio["\xa9alb"] = [release.title]
+                audio["----:com.apple.iTunes:ALBUMARTISTS"] = [artist.encode("utf-8")]
+            if display:
+                audio["\xa9ART"] = [display]
+            if names:
+                audio["----:com.apple.iTunes:ARTISTS"] = [n.encode("utf-8") for n in names]
         else:
-            audio["trkn"] = [(i, len(files))]
+            audio["tracknumber"] = str(i)
+            audio["tracktotal"] = str(len(files))
+            if album:
+                audio["album"] = album
+            if artist:
+                audio["albumartist"] = artist
+                audio["albumartists"] = [artist]
+            if display:
+                audio["artist"] = display
+            if names:
+                audio["artists"] = names
         audio.save()
 
 
@@ -93,7 +117,7 @@ def beet_import(dest: Path, release: Release, artist: str | None) -> None:
     if release.release_type == "single":
         cmd.append("-s")
     if artist:
-        cmd += ["--set", f"albumartist={artist}", "--set", f"artist={artist}"]
+        cmd += ["--set", f"albumartist={artist}"]
     if release.release_type != "single":
         cmd += ["--set", f"album={release.title}"]
     if release.year:
@@ -126,8 +150,8 @@ def run_import(query: str, on_event=None) -> dict:
             files = download(release.url, dest, on_log=lambda m: emit("log", message=m))
             if not files:
                 raise RuntimeError("no audio files downloaded")
-            artist = (release.albumartist or albumartist or "").split(",")[0].strip() or None
-            stamp(files, release, artist)
+            artist = release.albumartist or albumartist
+            stamp(files, release, artist, track_artists(release.url, artist))
             beet_import(dest, release, artist)
         except Exception as exc:
             failed += 1

@@ -44,6 +44,15 @@ def _section(yt: YTMusic, artist: dict, key: str) -> list[dict]:
     return block.get("results") or []
 
 
+def _channel_from_handle(yt: YTMusic, handle: str) -> str | None:
+    page = yt._send_get_request(f"https://www.youtube.com/@{handle}").text
+    match = re.search(
+        r'(?:rel="canonical" href="https://www\.youtube\.com/channel/|itemprop="identifier" content=")(UC[\w-]+)',
+        page,
+    )
+    return match.group(1) if match else None
+
+
 def discography(yt: YTMusic, channel_id: str) -> tuple[str, list[Release]]:
     artist = yt.get_artist(channel_id)
     name = artist.get("name", channel_id)
@@ -76,10 +85,14 @@ def resolve(query: str) -> tuple[str | None, list[Release]]:
         print(f"Artist: {name}", file=sys.stderr)
         return name, releases
     if match := re.search(r"youtube\.com/@([^/?#]+)", query):
-        results = yt.search(match.group(1), filter="artists", ignore_spelling=True)
-        if not results:
-            raise ResolveError(f"No artist found for @{match.group(1)}")
-        name, releases = discography(yt, results[0]["browseId"])
+        handle = match.group(1)
+        channel_id = _channel_from_handle(yt, handle)
+        if not channel_id:
+            results = yt.search(handle, filter="artists", ignore_spelling=True)
+            if not results:
+                raise ResolveError(f"No artist found for @{handle}")
+            channel_id = results[0]["browseId"]
+        name, releases = discography(yt, channel_id)
         print(f"Artist: {name}", file=sys.stderr)
         return name, releases
 

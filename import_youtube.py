@@ -75,6 +75,20 @@ def _video_id(path: Path) -> str | None:
     return match.group(1) if match else None
 
 
+def write_albumtype(path: Path, kind: str) -> None:
+    if not path.is_file():
+        return
+    audio = MutagenFile(path)
+    if audio is None:
+        return
+    if isinstance(audio, MP4):
+        audio["----:com.apple.iTunes:MusicBrainz Album Type"] = [kind.encode("utf-8")]
+    else:
+        audio["MUSICBRAINZ_ALBUMTYPE"] = [kind]
+        audio["RELEASETYPE"] = [kind]
+    audio.save()
+
+
 def stamp(files: list[Path], release: Release, artist: str | None, guests: dict[str, list[str]] | None = None) -> None:
     guests = guests or {}
     album = release.title if release.release_type != "single" else None
@@ -93,6 +107,7 @@ def stamp(files: list[Path], release: Release, artist: str | None, guests: dict[
                 audio["\xa9ART"] = [display]
             if names:
                 audio["----:com.apple.iTunes:ARTISTS"] = [n.encode("utf-8") for n in names]
+            audio["----:com.apple.iTunes:MusicBrainz Album Type"] = [release.release_type.encode("utf-8")]
         else:
             audio["tracknumber"] = str(i)
             audio["tracktotal"] = str(len(files))
@@ -105,6 +120,8 @@ def stamp(files: list[Path], release: Release, artist: str | None, guests: dict[
                 audio["artist"] = display
             if names:
                 audio["artists"] = names
+            audio["MUSICBRAINZ_ALBUMTYPE"] = [release.release_type]
+            audio["RELEASETYPE"] = [release.release_type]
         audio.save()
 
 

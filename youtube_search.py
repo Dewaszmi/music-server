@@ -23,10 +23,19 @@ def _playlist(pid: str) -> str:
 
 
 def _type(section: str, raw: str | None) -> str:
-    value = (raw or "").lower()
-    if value in {"album", "ep", "single"}:
-        return value
+    value = re.sub(r"[-_]+", " ", (raw or "").lower()).strip()
+    value = " ".join(value.split())
+    if value in {"album", "lp"}:
+        return "album"
+    if value in {"ep", "mini album", "minialbum"}:
+        return "ep"
+    if value in {"single", "singiel"}:
+        return "single"
     return "album" if section == "albums" else "single"
+
+
+def _norm(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 _ROLE = re.compile(r"\s*(?:,\s*)?(?:&|and|feat\.?|ft\.?)\s+", re.I)
@@ -146,8 +155,16 @@ def discography(yt: YTMusic, channel_id: str) -> tuple[str, list[Release]]:
         for item in _section(yt, artist, section):
             pid = item.get("playlistId") or item.get("audioPlaylistId")
             browse_id = item.get("browseId") or ""
+            album = None
             if not pid and browse_id.startswith("MPRE"):
-                pid = yt.get_album(browse_id).get("audioPlaylistId")
+                album = yt.get_album(browse_id)
+                pid = album.get("audioPlaylistId")
+            raw_type = item.get("type")
+            if not raw_type and browse_id.startswith("MPRE"):
+                if album is None:
+                    album = yt.get_album(browse_id)
+                    pid = pid or album.get("audioPlaylistId")
+                raw_type = album.get("type")
             if not pid or pid in seen:
                 continue
             seen.add(pid)
@@ -155,7 +172,7 @@ def discography(yt: YTMusic, channel_id: str) -> tuple[str, list[Release]]:
                 Release(
                     _playlist(pid),
                     item.get("title") or pid,
-                    _type(section, item.get("type")),
+                    _type(section, raw_type),
                     item.get("year"),
                     name,
                 )
@@ -190,16 +207,67 @@ def resolve(query: str) -> tuple[str | None, list[Release]]:
     pid = result.get("playlistId")
     artist = _artist(result)
     browse_id = result.get("browseId") or ""
+    raw_type = result.get("type")
     if browse_id.startswith("MPRE"):
         album = yt.get_album(browse_id)
         title = album.get("title") or title
         year = album.get("year") or year
         pid = album.get("audioPlaylistId") or pid
         artist = _artist(album) or artist
+        raw_type = album.get("type") or raw_type
     if pid:
-        kind = _type("albums", result.get("type") or result.get("resultType"))
+        kind = _type("albums", raw_type)
         return artist, [Release(_playlist(pid), title, kind, year, artist)]
     return artist, [Release(f"https://www.youtube.com/watch?v={result['videoId']}", title, "single", year, artist)]
+
+
+def lookup_release_type(albumartist: str, title: str) -> str | None:
+    yt = YTMusic()
+    results = yt.search(f"{albumartist} {title}", filter="albums", ignore_spelling=True) or []
+    want_title, want_artist = _norm(title), _norm(albumartist)
+    match = None
+    for result in results:
+        if _norm(result.get("title") or "") != want_title:
+            continue
+        artists = _names(result)
+        if artists and want_artist and not any(want_artist in _norm(name) for name in artists):
+            continue
+        match = result
+        break
+    if not match and results and _norm(results[0].get("title") or "") == want_title:
+        match = results[0]
+    if not match:
+        return None
+    raw = match.get("type")
+    browse_id = match.get("browseId") or ""
+    if browse_id.startswith("MPRE"):
+        try:
+            raw = yt.get_album(browse_id).get("type") or raw
+        except Exception:
+            pass
+    return _type("albums", raw)
+
+
+def artist_release_types(artist: str) -> dict[str, str]:
+    yt = YTMusic()
+    results = yt.search(artist, filter="artists", ignore_spelling=True) or []
+    if not results:
+        return {}
+    _, releases = discography(yt, results[0]["browseId"])
+    return {_norm(release.title): release.release_type for release in releases}
+
+
+def _base(value: str) -> str:
+    return re.split(r"feat", _norm(value), 1)[0] or _norm(value)
+
+
+def match_release_type(title: str, types: dict[str, str]) -> str | None:
+    key = _norm(title)
+    if key in types:
+        return types[key]
+    base = _base(title)
+    hits = [kind for name, kind in types.items() if name == key or _base(name) == base]
+    return hits[0] if len(set(hits)) == 1 else None
 
 
 if __name__ == "__main__":

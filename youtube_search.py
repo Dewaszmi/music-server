@@ -60,6 +60,15 @@ def _parts(name: str, albumartist: str | None = None) -> list[str]:
     return out
 
 
+def primary_first(names: list[str], albumartist: str | None = None) -> list[str]:
+    if not names or not albumartist:
+        return list(names)
+    key = albumartist.casefold()
+    main = next((n for n in names if n.casefold() == key), None)
+    rest = [n for n in names if n.casefold() != key]
+    return ([main] if main else []) + rest
+
+
 def _names(item: dict, albumartist: str | None = None) -> list[str]:
     seen, names = set(), []
     for artist in item.get("artists") or []:
@@ -77,7 +86,7 @@ def _names(item: dict, albumartist: str | None = None) -> list[str]:
             if key not in seen:
                 seen.add(key)
                 names.append(name)
-    return names
+    return primary_first(names, albumartist)
 
 
 def artist_credit(names: list[str], albumartist: str | None = None) -> str:

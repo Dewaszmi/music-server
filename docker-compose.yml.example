@@ -5,6 +5,8 @@ services:
     ports:
       - "4533:4533"
     restart: unless-stopped
+    environment:
+      ND_LASTFM_SCROBBLEFIRSTARTISTONLY: "true"
     volumes:
       - "DATA_VOLUME:/data"
       - "MUSIC_VOLUME:/music"

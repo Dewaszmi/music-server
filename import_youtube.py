@@ -10,7 +10,7 @@ import yt_dlp
 from mutagen import File as MutagenFile
 from mutagen.mp4 import MP4
 
-from youtube_search import Release, ResolveError, artist_credit, resolve, track_artists
+from youtube_search import Release, ResolveError, artist_credit, primary_first, resolve, track_artists
 
 ROOT = Path(__file__).resolve().parent
 CACHE = ROOT / "yt-cache"
@@ -94,7 +94,7 @@ def stamp(files: list[Path], release: Release, artist: str | None, guests: dict[
     album = release.title if release.release_type != "single" else None
     for i, path in enumerate(files, 1):
         audio = MutagenFile(path)
-        names = guests.get(_video_id(path) or "") or ([artist] if artist else [])
+        names = primary_first(guests.get(_video_id(path) or "") or ([artist] if artist else []), artist)
         display = artist_credit(names, artist)
         if isinstance(audio, MP4):
             audio["trkn"] = [(i, len(files))]

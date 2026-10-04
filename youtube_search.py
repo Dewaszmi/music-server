@@ -189,6 +189,105 @@ def discography(yt: YTMusic, channel_id: str) -> tuple[str, list[Release]]:
     return name, releases
 
 
+_YT_URL = re.compile(r"(?:https?://)?(?:www\.|music\.)?(?:youtube\.com|youtu\.be)/", re.I)
+_VIDEO_ID = re.compile(r"(?:youtu\.be/|[?&]v=)([\w-]{11})(?![\w-])")
+_PLAYLIST_ID = re.compile(r"[?&]list=([\w-]+)")
+_BROWSE_ID = re.compile(r"/browse/(MPRE[\w-]+)")
+
+
+def _album_release(album: dict) -> tuple[str | None, Release]:
+    artist = _artist(album)
+    pid = album.get("audioPlaylistId")
+    if not pid:
+        raise ResolveError("Album has no audio playlist.")
+    return artist, Release(
+        _playlist(pid),
+        album.get("title") or pid,
+        _type("albums", album.get("type")),
+        album.get("year"),
+        artist,
+    )
+
+
+def _resolve_album(yt: YTMusic, browse_id: str) -> tuple[str | None, list[Release]]:
+    try:
+        album = yt.get_album(browse_id)
+    except Exception as exc:
+        raise ResolveError(f"No album found for {browse_id}") from exc
+    artist, release = _album_release(album)
+    return artist, [release]
+
+
+def _resolve_playlist(yt: YTMusic, pid: str) -> tuple[str | None, list[Release]]:
+    if pid.startswith("OLAK5uy_"):
+        browse = yt.get_album_browse_id(pid)
+        if not browse:
+            raise ResolveError(f"No album found for {pid}")
+        return _resolve_album(yt, browse)
+    if pid.startswith("RD"):
+        raise ResolveError("That link is a YouTube Music radio mix, not an album.")
+    try:
+        playlist = yt.get_playlist(pid, limit=1)
+    except Exception as exc:
+        raise ResolveError(f"No playlist found for {pid}") from exc
+    author = playlist.get("author")
+    if isinstance(author, dict):
+        author = author.get("name")
+    title = playlist.get("title")
+    if not title:
+        raise ResolveError(f"No playlist found for {pid}")
+    year = playlist.get("year")
+    return author, [Release(_playlist(pid), title, "album", str(year) if year else None, author)]
+
+
+def _resolve_video(yt: YTMusic, video_id: str) -> tuple[str | None, list[Release]]:
+    title = artist = year = None
+    try:
+        watch = yt.get_watch_playlist(video_id, limit=1)
+        track = next((t for t in (watch.get("tracks") or []) if t.get("videoId") == video_id), None)
+    except Exception:
+        track = None
+    if track:
+        title = track.get("title")
+        artist = _artist(track)
+        year = track.get("year")
+    if not title:
+        try:
+            details = yt.get_song(video_id).get("videoDetails") or {}
+        except Exception as exc:
+            raise ResolveError(f"No track found for {video_id}") from exc
+        title = details.get("title")
+        artist = artist or details.get("author")
+    if not title:
+        raise ResolveError(f"No track found for {video_id}")
+    return artist, [
+        Release(
+            f"https://www.youtube.com/watch?v={video_id}",
+            title,
+            "single",
+            str(year) if year else None,
+            artist,
+        )
+    ]
+
+
+def _resolve_url(yt: YTMusic, query: str) -> tuple[str | None, list[Release]] | None:
+    if not _YT_URL.search(query):
+        return None
+    if match := _BROWSE_ID.search(query):
+        return _resolve_album(yt, match.group(1))
+    video = _VIDEO_ID.search(query)
+    playlist = _PLAYLIST_ID.search(query)
+    # A watch link names one track. list= on it is the autoplay mix, not the request.
+    if video and re.search(r"youtu\.be/|/watch\b", query):
+        return _resolve_video(yt, video.group(1))
+    if playlist:
+        return _resolve_playlist(yt, playlist.group(1))
+    if video:
+        return _resolve_video(yt, video.group(1))
+    raise ResolveError("Unsupported YouTube URL.")
+
+
 def resolve(query: str) -> tuple[str | None, list[Release]]:
     yt = YTMusic()
     if match := re.search(r"youtube\.com/channel/(UC[\w-]+)", query):
@@ -206,6 +305,8 @@ def resolve(query: str) -> tuple[str | None, list[Release]]:
         name, releases = discography(yt, channel_id)
         print(f"Artist: {name}", file=sys.stderr)
         return name, releases
+    if direct := _resolve_url(yt, query):
+        return direct
 
     results = yt.search(query, ignore_spelling=True)
     if not results:

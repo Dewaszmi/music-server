@@ -37,6 +37,11 @@ class _Log:
         self.fn(str(msg))
 
 
+def _playable(path: Path) -> bool:
+    audio = MutagenFile(path)
+    return bool(audio and getattr(getattr(audio, "info", None), "length", 0))
+
+
 def download(url: str, dest: Path, on_log=None) -> list[Path]:
     dest.mkdir(parents=True)
     opts = {
@@ -44,14 +49,18 @@ def download(url: str, dest: Path, on_log=None) -> list[Path]:
         "noprogress": True,
         "ignoreerrors": True,
         "outtmpl": str(dest / "%(title)s [%(id)s].%(ext)s"),
-        "format": "bestaudio/best",
+        # Adaptive audio 403s on a normal GET, and on a second range, but one
+        # request covering the whole file succeeds. The android client's only
+        # fully-downloadable format for some tracks is a cover-art stub.
+        "format": "bestaudio[abr>=32]/best[abr>=32]/bestaudio/best",
+        "http_chunk_size": 100 * 1024 * 1024,
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "best"},
             {"key": "FFmpegMetadata"},
             {"key": "EmbedThumbnail"},
         ],
         "writethumbnail": True,
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        "extractor_args": {"youtube": {"player_client": ["web_embedded", "android"]}},
         "remote_components": ["ejs:github"],
         "logger": _Log(on_log),
     }
@@ -65,8 +74,14 @@ def download(url: str, dest: Path, on_log=None) -> list[Path]:
             (p for p in dest.iterdir() if p.suffix.lower() in AUDIO and f"[{entry['id']}]" in p.name),
             None,
         )
-        if match:
-            files.append(match)
+        if not match:
+            continue
+        if not _playable(match):
+            match.unlink(missing_ok=True)
+            if on_log:
+                on_log(f"Skipped {entry.get('title') or entry['id']}: downloaded file has no audio")
+            continue
+        files.append(match)
     return files
 
 
